@@ -86,7 +86,7 @@ type MMS struct {
 	FromAddress       PhoneNumber `xml:"from_address,string,attr"`
 	MessageClassifier string      `xml:"m_cls,attr"`
 	MessageSize       string      `xml:"m_size,attr"`
-	Parts             []Part      `xml:"parts>part"`
+	Parts             []*Part     `xml:"parts>part"`
 	Addresses         []Address   `xml:"addrs>addr"`
 	ReadableDate      string      `xml:"readable_date,attr"`
 	Date              AndroidTS   `xml:"date,string,attr"` // consider reading in as int

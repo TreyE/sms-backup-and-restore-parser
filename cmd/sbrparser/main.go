@@ -119,8 +119,34 @@ func HtmlPrelude(fileName string, f *os.File) {
 			  <title>`
 	const htmlAfterTitle = `</title>
 	      <style>
+          img {
+					  max-height: 8em;
+						width: auto;
+					}
+
 				  .textmessage {
-					  margin: 2em;
+					  margin: 1em;
+						padding: 0.5em;
+					}
+
+					.inbound {
+					  color: #000000;
+						background-color: #ececec;
+						float: left;
+						max-width: 75%;
+					}
+
+					.outbound {
+						color: #ffffff;
+					  background-color: #14b892;
+						float: right;
+						max-width: 75%;
+					}
+
+					.breaker {
+					  clear: both;
+						padding: 0px;
+						margin: 0px;
 					}
 				</style>
 			</head>
@@ -144,7 +170,9 @@ func HtmlOutro(f *os.File) {
 func EncodeSmsMessageToHtml(f *os.File, sms smsbackuprestore.SMS) {
 	var messageHeader string
 	var messageSender string
-	if strings.ToLower(sms.Type.String()) == "sent" {
+	isOutbound := strings.ToLower(sms.Type.String()) == "sent"
+
+	if isOutbound {
 		messageHeader = `<div class="textmessage outbound">`
 		messageSender = "Me"
 	} else {
@@ -162,24 +190,51 @@ func EncodeSmsMessageToHtml(f *os.File, sms smsbackuprestore.SMS) {
 	fmt.Fprintln(f, sms.Body)
 	fmt.Fprintln(f, "</div>")
 	fmt.Fprintln(f, "</div>")
+	fmt.Fprintln(f, "<div class=\"breaker\"></div>")
 }
 
 func IsInboundMMS(mms smsbackuprestore.MMS) bool {
 	return mms.Addresses[0].Address.String() == mms.Address.String()
 }
 
+func EncodeMMSBodyToHtml(f *os.File, mms smsbackuprestore.MMS) {
+	for _, p := range mms.Parts {
+		fmt.Fprintln(f, "<div>")
+		if p.ContentType == "text/plain" {
+			fmt.Fprintln(f, smsbackuprestore.CleanupMessageBody(p.Text))
+		} else if strings.HasPrefix(p.ContentType, "image/") && p.FilePath != nil {
+			fmt.Fprintf(f, "<a href=\"%s\"><img src=\"%s\"/></a>", *p.FilePath, *p.FilePath)
+		} else if strings.HasPrefix(p.ContentType, "application/smil") {
+			fmt.Fprintln(f, "<strong>Message Contains Layout Information: We don't support that yet.</strong>")
+		} else {
+			fmt.Fprintf(f, "<strong>Unknown content: %s</strong>", p.ContentType)
+		}
+		fmt.Fprintln(f, "</div>")
+	}
+}
+
 func EncodeMmsMessageToHtml(f *os.File, mms smsbackuprestore.MMS) {
 	var messageHeader string
+	var messageSender string
 	if IsInboundMMS(mms) {
 		messageHeader = `<div class="textmessage inbound">`
+		messageSender = mms.ContactName
 	} else {
 		messageHeader = `<div class="textmessage outbound">`
+		messageSender = "Me"
 	}
 
 	fmt.Fprintln(f, messageHeader)
 	fmt.Fprintln(f, "<div>")
+	fmt.Fprintln(f, messageSender)
+	fmt.Fprintln(f, " - ")
+	fmt.Fprintln(f, mms.Date.String())
+	fmt.Fprintln(f, "</div>")
+	fmt.Fprintln(f, "<div>")
+	EncodeMMSBodyToHtml(f, mms)
 	fmt.Fprintln(f, "</div>")
 	fmt.Fprintln(f, "</div>")
+	fmt.Fprintln(f, "<div class=\"breaker\"></div>")
 }
 
 func EncodeHtmlMessage(f *os.File, b interface{}) {
