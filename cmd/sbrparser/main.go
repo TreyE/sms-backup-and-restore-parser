@@ -20,26 +20,27 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
- */
+*/
 
 // Package main for command-line SMS Backup & Restore parser.
 // This tool parses SMS Backup & Restore Android app XML output.
 package main
 
 import (
-	"fmt"
-	"flag"
-	"os"
-	"io/ioutil"
-	"encoding/xml"
-	"github.com/danzek/sms-backup-and-restore-parser/smsbackuprestore"
-	"time"
-	"path/filepath"
-	"strings"
-	"regexp"
-	"strconv"
-	"unicode/utf16"
 	"bytes"
+	"encoding/xml"
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+	"unicode/utf16"
+
+	"github.com/danzek/sms-backup-and-restore-parser/smsbackuprestore"
 )
 
 // SMSOutput calls GenerateSMSOutput() and prints status/errors.
@@ -56,7 +57,7 @@ func SMSOutput(m *smsbackuprestore.Messages, outputDir string) {
 }
 
 // MMSOutput calls DecodeImages() and GenerateMMSOutput() and prints status/errors.
-func MMSOutput(m *smsbackuprestore.Messages, outputDir string) {
+func MediaOutput(m *smsbackuprestore.Messages, outputDir string) {
 	// decode and output mms images
 	fmt.Println("\nCreating images output...")
 	numImagesIdentified, numImagesSuccessfullyWritten, imgOutputErrors := smsbackuprestore.DecodeImages(m, outputDir)
@@ -68,7 +69,10 @@ func MMSOutput(m *smsbackuprestore.Messages, outputDir string) {
 	fmt.Println("Finished decoding images")
 	fmt.Printf("%d images were identified and %d were successfully written to file\n", numImagesIdentified, numImagesSuccessfullyWritten)
 	fmt.Println("Image file names are in format: <original file name (if known)>_<mms index>-<sms index>.<file extension>")
+}
 
+// MMSOutput calls DecodeImages() and GenerateMMSOutput() and prints status/errors.
+func MMSOutput(m *smsbackuprestore.Messages, outputDir string) {
 	// generate mms output
 	fmt.Println("\nCreating MMS output...")
 	mmsOutputErr := smsbackuprestore.GenerateMMSOutput(m, outputDir)
@@ -81,7 +85,7 @@ func MMSOutput(m *smsbackuprestore.Messages, outputDir string) {
 }
 
 // CallsOutput calls GenerateCallOutput() and prints status/errors.
-func CallsOutput (c *smsbackuprestore.Calls, outputDir string) {
+func CallsOutput(c *smsbackuprestore.Calls, outputDir string) {
 	// generate calls
 	fmt.Println("\nCreating calls output...")
 	err := smsbackuprestore.GenerateCallOutput(c, outputDir)
@@ -106,6 +110,120 @@ func GetExecutablePath() (string, error) {
 	}
 
 	return exePath, nil
+}
+
+func HtmlPrelude(fileName string, f *os.File) {
+	const htmlBeforeTitle = `
+	  <html>
+		  <head>
+			  <title>`
+	const htmlAfterTitle = `</title>
+	      <style>
+				  .textmessage {
+					  margin: 2em;
+					}
+				</style>
+			</head>
+		  <body>
+	`
+
+	fmt.Fprint(f, htmlBeforeTitle)
+	fmt.Fprint(f, fileName)
+	fmt.Fprint(f, htmlAfterTitle)
+}
+
+func HtmlOutro(f *os.File) {
+	const htmlTemplate = `
+      </body>
+    </html>
+	`
+
+	fmt.Fprintln(f, htmlTemplate)
+}
+
+func EncodeSmsMessageToHtml(f *os.File, sms smsbackuprestore.SMS) {
+	var messageHeader string
+	var messageSender string
+	if strings.ToLower(sms.Type.String()) == "sent" {
+		messageHeader = `<div class="textmessage outbound">`
+		messageSender = "Me"
+	} else {
+		messageHeader = `<div class="textmessage inbound">`
+		messageSender = sms.ContactName
+	}
+
+	fmt.Fprintln(f, messageHeader)
+	fmt.Fprintln(f, "<div>")
+	fmt.Fprintln(f, messageSender)
+	fmt.Fprintln(f, " - ")
+	fmt.Fprintln(f, sms.Date.String())
+	fmt.Fprintln(f, "</div>")
+	fmt.Fprintln(f, "<div>")
+	fmt.Fprintln(f, sms.Body)
+	fmt.Fprintln(f, "</div>")
+	fmt.Fprintln(f, "</div>")
+}
+
+func IsInboundMMS(mms smsbackuprestore.MMS) bool {
+	return mms.Addresses[0].Address.String() == mms.Address.String()
+}
+
+func EncodeMmsMessageToHtml(f *os.File, mms smsbackuprestore.MMS) {
+	var messageHeader string
+	if IsInboundMMS(mms) {
+		messageHeader = `<div class="textmessage inbound">`
+	} else {
+		messageHeader = `<div class="textmessage outbound">`
+	}
+
+	fmt.Fprintln(f, messageHeader)
+	fmt.Fprintln(f, "<div>")
+	fmt.Fprintln(f, "</div>")
+	fmt.Fprintln(f, "</div>")
+}
+
+func EncodeHtmlMessage(f *os.File, b interface{}) {
+	sms, ok_cast := b.(smsbackuprestore.SMS)
+	if ok_cast {
+		EncodeSmsMessageToHtml(f, sms)
+	} else {
+		EncodeMmsMessageToHtml(f, b.(smsbackuprestore.MMS))
+	}
+}
+
+func HtmlOutput(m *smsbackuprestore.Messages, fileName string, outputDir string) {
+	var b []interface{}
+	smsStart := len(m.MMS)
+	aSize := len(m.MMS) + len(m.SMS)
+	b = make([]interface{}, aSize)
+	for i, mms := range m.MMS {
+		b[i] = mms
+	}
+	for i, sms := range m.SMS {
+		b[i+smsStart] = sms
+	}
+	dateSort := func(a, b interface{}) int {
+		return strings.Compare(
+			a.(smsbackuprestore.DatedMessage).MessageDate().String(),
+			b.(smsbackuprestore.DatedMessage).MessageDate().String(),
+		)
+	}
+	slices.SortFunc(b, dateSort)
+
+	htmlFilePath := filepath.Join(outputDir, "messages.html")
+	f, err := os.Create(htmlFilePath)
+	if err != nil {
+		panic(err)
+	}
+	defer f.Close()
+
+	HtmlPrelude(fileName, f)
+
+	for _, msg := range b {
+		EncodeHtmlMessage(f, msg)
+	}
+
+	HtmlOutro(f)
 }
 
 // main function for command-line SMS Backup & Restore app XML output parser.
@@ -157,11 +275,11 @@ func main() {
 				fmt.Printf("\nLoading %s into memory and parsing (this may take a little while) ...\n", xmlFilePath)
 
 				// read entire file into data variable
-				data, fileReadErr := ioutil.ReadFile(xmlFilePath)
+				data, fileReadErr := os.ReadFile(xmlFilePath)
 				if fileReadErr != nil {
 					panic(fileReadErr)
 				}
-				
+
 				// remove null bytes encoded as XML entities because the Java developer of SMS Backup & Restore doesn't understand UTF-8 nor XML
 				data = bytes.Replace(data, []byte("&#0;"), []byte(""), -1)
 
@@ -186,11 +304,15 @@ func main() {
 					// print validation / qc / stats to stdout
 					m.PrintMessageCountQC()
 
+					MediaOutput(m, *pOutputDirectory)
+
 					// generate sms
 					SMSOutput(m, *pOutputDirectory)
 
 					// generate mms
 					MMSOutput(m, *pOutputDirectory)
+
+					HtmlOutput(m, fileName, *pOutputDirectory)
 				} else {
 					// calls backup
 					// instantiate calls object
@@ -210,8 +332,8 @@ func main() {
 			}
 		}
 	} else {
-		fmt.Fprint(os.Stderr, "Missing required argument: Specify path to xml backup file(s).\n" +
-			"Example: sbrparser.exe C:\\Users\\4n68r\\Documents\\sms-20180213135542.xml\n")  // todo -- use name of executable
+		fmt.Fprint(os.Stderr, "Missing required argument: Specify path to xml backup file(s).\n"+
+			"Example: sbrparser.exe C:\\Users\\4n68r\\Documents\\sms-20180213135542.xml\n") // todo -- use name of executable
 		return
 	}
 
